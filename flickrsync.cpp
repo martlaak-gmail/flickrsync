@@ -24,7 +24,7 @@ using namespace std;
 
 /* exported to commands.c */
 int verbose{1};
-const char* program{"flicrsync"};
+const char* program{"flickrsync"};
 
 static void FlickrSyncMessageHandler(void *, const char *message)
 {
@@ -46,11 +46,17 @@ static struct option long_options[] =
 
 static void printHelpString(void)
 {
-  printf("Sync folder to Flickr photoset\n");
-  printf("Usage: %s [OPTIONS] folder\n\n", program);
-
-  /* Extra space for neater distinctions in output */
-  fputs("\n", stdout);
+  printf("Sync folder of photos/videos to Flickr photoset\n");
+  printf("Usage: %s [OPTIONS] folder\n"
+         "where OPTIONS are:\n"
+         "  -n, --dry-run           Do not change anything, just show what should have been synced\n"
+         "  -d, --download          Download photos/videos missing from Flickr to folder\n"
+         "  -r, --remove            Delete photos/videos missing in local folder from Flickr\n"
+         "                          (note, that this needs delete permission given to the app by adding &perms=delete\n"
+         "                          to the end of Flickr oauth authentication URL during authentication setup)\n"
+         "  -s, --sort-by-title     Sort photos/videos by title after syncing\n"
+         "  -h, --help              Print this help, then exit\n\n"
+         , program);
 }
 
 const string FLICKCURL_CONFIGFILE_NAME{".flickcurl.conf"};
