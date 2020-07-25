@@ -36,7 +36,7 @@ syncs photos/videos in the folder /data/photos/Wedding to Flickr photoset named 
 downloads all missing photos/videos from the photoset Wedding to the folder /data/photos/Wedding (the folder can be empty at start to download all photoset
 
 ## Authentication
-**flickrsync** uses exactly the same authentication system as flickcurl tool.
+**flickrsync** uses exactly the same authentication system as [Flickcurl](http://librdf.org/flickcurl/) tool.
 
 So, to use flickrsync and flickcurl, you first have to [create Flickr API key](https://www.flickr.com/services/apps/create/apply/) and create Flickr OAuth tokens into ~/.flickcurl.conf file.
 
