@@ -54,7 +54,7 @@ To build the tool on modern Ubuntu:
  
     ```sudo apt install flickcurl-utils libflickcurl-dev qt5-default libxml2-dev```
   
- 3. build the too, with:
+ 3. in the flickrsync source foulder, build the tool, with:
  
     ```qmake; make```
  
