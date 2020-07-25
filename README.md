@@ -22,7 +22,7 @@ where OPTIONS are:
 
 -h, --help -- Print this help, then exit
 
-Note that the folder can be long path but only last folder name is used as Flickr set name
+Note, that the folder can be long path but only last folder name is used as Flickr set name
 
 ## Examples
 ```flickrsync -s /data/photos/Wedding```
