@@ -27,13 +27,13 @@ Note, that the folder can be long path but only last folder name is used as Flic
 ## Examples
 ```flickrsync -s /data/photos/Wedding```
 
-syncs photos/videos in the folder /data/photos/Wedding to Flickr photoset named Wedding (creates the photoset if not existing) and sorts the photoset after sync based on photo titles
+syncs photos/videos in the folder /data/photos/Wedding to Flickr photoset named Wedding (creates the photoset if not existing) and sorts the photoset after sync based on photo titles (file basenames).
 
 **flickrsync** can also be used to download all the photos/videos in set to folder. For example
 
 ```flickrsync -d /data/photos/Wedding```
 
-downloads all missing photos/videos from the photoset Wedding to the folder /data/photos/Wedding (the folder can be empty at start to download all photoset
+downloads all missing photos/videos from the photoset Wedding to the folder /data/photos/Wedding (the folder can be empty at start to download all photoset.
 
 ## Authentication
 **flickrsync** uses exactly the same authentication system as [Flickcurl](http://librdf.org/flickcurl/) tool.
