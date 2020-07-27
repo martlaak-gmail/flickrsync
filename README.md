@@ -1,6 +1,6 @@
 # flickrsync
 
-Sync folder of photos/videos to [Filckr](www.flickr.com) set of the same name
+Sync folder of photos/videos with [Filckr](www.flickr.com) set of the same name
 
 ## Requirements
 
