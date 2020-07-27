@@ -45,12 +45,12 @@ Please read how to do that from flickcurl [manual](http://librdf.org/flickcurl/a
 Note, that you have to add &perms=delete to the end of the Flickr oauth authentication URL
 
 ## Building
-To build the tool on modern Ubuntu:
+To build the tool on modern Linux:
  1. clone the source, with:
  
     ```git clone https://github.com/martlaak-gmail/flickrsync.git```
  
- 2. install requirements, with:
+ 2. install requirements, can be done like this on Linux with apt package manager:
  
     ```sudo apt install flickcurl-utils libflickcurl-dev qt5-default libxml2-dev```
   
