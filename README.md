@@ -20,6 +20,8 @@ where OPTIONS are:
 
 -s, --sort-by-title  -- Sort photos/videos by title after syncing
 
+-o, --set-titles-by-date-taken -- Set photo titles by title daken (in form YYYYMMDD-HHMMSS)
+
 -h, --help -- Print this help, then exit
 
 Note, that the folder can be long path but only last folder name is used as Flickr set name
