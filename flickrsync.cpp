@@ -15,6 +15,7 @@
 #include <QDir>
 #include <QRegularExpression>
 
+#include <random>
 #include <string>
 #include <set>
 
@@ -39,7 +40,7 @@ static void FlickrSyncMessageHandler(void *, const char *message)
   fprintf(stderr, "%s: ERROR: %s\n", program, message);
 }
 
-#define GETOPT_STRING "hnrdso"
+#define GETOPT_STRING "hnrfdsog:"
 
 static struct option long_options[] =
 {
@@ -47,9 +48,11 @@ static struct option long_options[] =
   {"help",    0, 0, 'h'},
   {"dry-run",  0, 0, 'n'},
   {"remove",  0, 0, 'r'},
+  {"remove-duplicates",  0, 0, 'f'},
   {"download-missing",  0, 0, 'd'},
   {"sort-by-title",  0, 0, 's'},
   {"set-titles-by-date-taken",  0, 0, 'o'},
+  {"get-random-photo",  1, 0, 'g'},
   {NULL,      0, 0, 0}
 };
 
@@ -63,13 +66,20 @@ static void printHelpString(void)
          "  -r, --remove                   Delete photos/videos missing in local folder from Flickr\n"
          "                                 (note, that this needs delete permission given to the app by adding &perms=delete\n"
          "                                 to the end of Flickr oauth authentication URL during authentication setup)\n"
+         "  -f, --remove-duplicates        Delete duplicate photos in the set\n"
+         "                                 (note, that this needs delete permission given to the app by adding &perms=delete\n"
+         "                                 to the end of Flickr oauth authentication URL during authentication setup)\n"
          "  -s, --sort-by-title            Sort photos/videos by title after syncing\n"
          "  -o, --set-titles-by-date-taken Set photo titles by title daken (in form YYYYMMDD-HHMMSS)\n"
+         "  -g, --get-random-photo {file}  Download random photo from album to {file} (if no folder is specified random album is chosen)\n"
          "  -h, --help                     Print this help, then exit\n\n"
          , program);
 }
 
 const string FLICKCURL_CONFIGFILE_NAME{".flickcurl.conf"};
+
+bool dryRun = false;
+flickcurl *fc = nullptr;
 
 string flickcurlConfigFile()
 {
@@ -132,6 +142,53 @@ bool downloadFile(const string& url, const string& fileName)
   return result;
 }
 
+
+bool downloadPhoto(const string& photoId, const string& filename, const QDir& folder)
+{
+  if (auto sizes = flickcurl_photos_getSizes(fc, photoId.c_str()))
+  {
+    string filePath;
+    string downloadUrl;
+    for (int i = 0; sizes[i]; ++i)
+    {
+      if (strcmp(sizes[i]->media, "video") == 0 &&
+          strcmp(sizes[i]->label, "Video Original") == 0)
+      {
+        filePath = folder.filePath(QString(filename.c_str()) + ".mp4").toStdString();
+        downloadUrl = sizes[i]->source;
+        break;
+      }
+      else if (strcmp(sizes[i]->media, "photo") == 0 &&
+               strcmp(sizes[i]->label, "Original") == 0)
+      {
+        filePath = folder.filePath(QString(filename.c_str()) + ".jpg").toStdString();
+        downloadUrl = sizes[i]->source;
+      }
+    }
+    if (!downloadUrl.empty())
+    {
+      if (!dryRun)
+      {
+        printf("Starting to download photo/video file '%s' ...", filePath.c_str());
+        fflush(stdout);
+        if (downloadFile(downloadUrl, filePath))
+        {
+          printf("Done\n");
+          return true;
+        }
+        else
+          printf("Failed!\n");
+      }
+      else
+      {
+        printf("Need to download photo/video file '%s'\n", filePath.c_str());
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool titleExistingInSet(const map<string,photoInfo>& photos, const string& title)
 {
   for (const auto& photo : photos)
@@ -166,15 +223,16 @@ string addSuffixWhenDuplicateNamesExist(const string& title, const map<string,ph
 
 int main(int argc, char *argv[])
 {
-  flickcurl *fc = NULL;
   int rc = 0;
   int help = 0;
   int i;
-  bool dryRun = false;
   bool removeNonExisting = false;
+  bool removeDuplicates = false;
   bool downloadNonExisting = false;
   bool sortByTitle = false;
   bool renameByDateTaken = false;
+  bool getRandomPhoto = false;
+  string randomPhotoFileName;
 
   flickcurl_init();
 
@@ -256,12 +314,22 @@ int main(int argc, char *argv[])
       removeNonExisting = true;
       break;
 
+    case 'f':
+      removeDuplicates = true;
+      break;
+
     case 's':
       sortByTitle = true;
       break;
 
     case 'o':
       renameByDateTaken = true;
+      break;
+
+    case 'g':
+      getRandomPhoto = true;
+      if (optarg)
+        randomPhotoFileName = optarg;
       break;
     }
 
@@ -270,234 +338,288 @@ int main(int argc, char *argv[])
   argv += optind;
   argc -= optind;
 
-  if (help || !argc)
+  if (help)
   {
     printHelpString();
     exit(-1);
   }
   else
   {
-    QDir folder(argv[0]);
-    if (folder.exists())
+    if (argc)
     {
-      string setName = folder.dirName().toStdString();
-      printf("Starting to sync photos/videos from folder '%s' to Flickr...\n", argv[0]);
-      map<string,string> photosInFolder;
-      for (const auto& entry : folder.entryInfoList())
-        if (entry.isFile())
-        {
-          string baseName = entry.baseName().toLower().toStdString();
-          if (photosInFolder.count(baseName) != 0)
-          {
-            printf("ERROR: Photos/videos with duplicate basenames found (%s AND %s) - can not sync correctly\n",
-                   entry.filePath().toStdString().c_str(), photosInFolder[baseName].c_str());
-          }
-          else
-            photosInFolder[baseName] = entry.filePath().toStdString();
-        }
-
-      string setId;
-      if (auto photoset_list = flickcurl_photosets_getList(fc, nullptr))
+      QDir folder(argv[0]);
+      if (folder.exists())
       {
-        for(int i = 0; photoset_list[i]; i++)
-          if (string(photoset_list[i]->title) == setName)
+        string setName = folder.dirName().toStdString();
+        printf("Starting to sync photos/videos from folder '%s' to Flickr...\n", argv[0]);
+        map<string,string> photosInFolder;
+        for (const auto& entry : folder.entryInfoList())
+          if (entry.isFile())
           {
-            printf("Flickr photoset '%s' (id=%s) is already existing\n", setName.c_str(), photoset_list[i]->id);
-            setId = photoset_list[i]->id;
-          }
-        flickcurl_free_photosets(photoset_list);
-      }
-
-      map<string,photoInfo> photosInSet;
-      if (!setId.empty())
-      {
-        if (auto photos = flickcurl_photosets_getPhotos(fc, setId.c_str(), "date_upload,date_taken,description", -1, -1, -1))
-        {
-          for (int i = 0; photos[i]; i++)
-          {
-            auto description = photos[i]->fields[PHOTO_FIELD_description].string;
-            photosInSet[photos[i]->id] = {photos[i]->fields[PHOTO_FIELD_title].string,
-                                          photos[i]->fields[PHOTO_FIELD_dates_taken].string,
-                                          description ? description : ""};
-          }
-          flickcurl_free_photos(photos);
-        }
-      }
-      if (renameByDateTaken && photosInSet.size())
-      {
-        for (const auto& photoFile : photosInSet)
-          if (!isDateBasedName(photoFile.second.title))
-          {
-            auto correctName = correctNameBasedOnDateTaken(photoFile.second.dateTaken);
-            if (!correctName.empty())
+            string baseName = entry.baseName().toLower().toStdString();
+            if (photosInFolder.count(baseName) != 0)
             {
-              if (photoFile.second.title.substr(0, CORRECT_DATE_BASED_NAME_LENGTH) != correctName)
-              {
-                correctName = addSuffixWhenDuplicateNamesExist(correctName, photosInSet);
-                if (!dryRun)
-                {
-                  printf("Setting photo title based on date taken %s => %s\n", photoFile.second.title.c_str(),
-                         correctName.c_str());
-                  if (auto ret = flickcurl_photos_setMeta(fc, photoFile.first.c_str(),
-                                                          correctName.c_str(),
-                                                          photoFile.second.dateTaken.c_str()))
-                    printf("ERROR: Unable to set photo %s title to %s: %d\n", photoFile.second.title.c_str(),
-                           correctName.c_str(), ret);
-                  else
-                    photosInSet[photoFile.first].title = correctName;
-                }
-                else
-                  printf("Need to set photo title based on date taken %s => %s\n", photoFile.second.title.c_str(),
-                         correctName.c_str());
-              }
-            }
-          }
-      }
-      map<string,string> uploadedPhotos;
-      for (const auto& photoFile : photosInFolder)
-        if (!titleExistingInSet(photosInSet, photoFile.first))
-        {
-          flickcurl_upload_params params;
-          memset(&params, '\0', sizeof(flickcurl_upload_params));
-          params.safety_level = 1;
-          params.content_type = 1;
-          params.hidden = 1;
-          params.is_family = 1;
-          params.title = photoFile.first.c_str();
-          params.photo_file = photoFile.second.c_str();
-
-          if (!dryRun)
-          {
-            printf("Uploading photo/video %s ...", params.photo_file);
-            fflush(stdout);
-            if (auto status = flickcurl_photos_upload_params(fc, &params))
-            {
-              printf("Done (id=%s)\n", status->photoid);
-              uploadedPhotos[photoFile.first] = status->photoid;
-              if (addToSet(fc, status->photoid, setName, &setId))
-                photosInSet[status->photoid] = { photoFile.first, "", "" };
-              flickcurl_free_upload_status(status);
+              printf("ERROR: Photos/videos with duplicate basenames found (%s AND %s) - can not sync correctly\n",
+                     entry.filePath().toStdString().c_str(), photosInFolder[baseName].c_str());
             }
             else
-              printf("Failed!\n");
+              photosInFolder[baseName] = entry.filePath().toStdString();
           }
-          else
+
+        string setId;
+        if (auto photoset_list = flickcurl_photosets_getList(fc, nullptr))
+        {
+          for(int i = 0; photoset_list[i]; i++)
+            if (string(photoset_list[i]->title) == setName)
+            {
+              printf("Flickr photoset '%s' (id=%s) is already existing\n", setName.c_str(), photoset_list[i]->id);
+              setId = photoset_list[i]->id;
+            }
+          flickcurl_free_photosets(photoset_list);
+        }
+
+        map<string,photoInfo> photosInSet;
+        if (!setId.empty())
+        {
+          int page{1};
+          bool lastPage{false};
+          while (!lastPage)
           {
-            printf("Need to upload photo %s\n", params.photo_file);
-            uploadedPhotos[photoFile.first] = "-";
+            if (auto photos = flickcurl_photosets_getPhotos(fc, setId.c_str(), "date_upload,date_taken,description", -1, 500, page))
+            {
+              unsigned photosInPage{0};
+              for (int i = 0; photos[i]; i++)
+              {
+                auto description = photos[i]->fields[PHOTO_FIELD_description].string;
+                photosInSet[photos[i]->id] = {photos[i]->fields[PHOTO_FIELD_title].string,
+                                              photos[i]->fields[PHOTO_FIELD_dates_taken].string,
+                                              description ? description : ""};
+                ++photosInPage;
+              }
+              flickcurl_free_photos(photos);
+              if (photosInPage < 500)
+                lastPage = true;
+              else
+                ++page;
+            }
           }
         }
-        else
-          printf("Photo/video %s is already existing in set, skipping\n", photoFile.first.c_str());
-
-      int downloaded = 0;
-      int deleted = 0;
-      auto photo = photosInSet.begin();
-      while (photo != photosInSet.end())
-      {
-        if (photosInFolder.count(photo->second.title) == 0)
+        if (renameByDateTaken && photosInSet.size())
         {
-          if (removeNonExisting)
+          for (const auto& photoFile : photosInSet)
+            if (!isDateBasedName(photoFile.second.title))
+            {
+              auto correctName = correctNameBasedOnDateTaken(photoFile.second.dateTaken);
+              if (!correctName.empty())
+              {
+                if (photoFile.second.title.substr(0, CORRECT_DATE_BASED_NAME_LENGTH) != correctName)
+                {
+                  correctName = addSuffixWhenDuplicateNamesExist(correctName, photosInSet);
+                  if (!dryRun)
+                  {
+                    printf("Setting photo title based on date taken %s => %s\n", photoFile.second.title.c_str(),
+                           correctName.c_str());
+                    if (auto ret = flickcurl_photos_setMeta(fc, photoFile.first.c_str(),
+                                                            correctName.c_str(),
+                                                            photoFile.second.dateTaken.c_str()))
+                      printf("ERROR: Unable to set photo %s title to %s: %d\n", photoFile.second.title.c_str(),
+                             correctName.c_str(), ret);
+                    else
+                      photosInSet[photoFile.first].title = correctName;
+                  }
+                  else
+                    printf("Need to set photo title based on date taken %s => %s\n", photoFile.second.title.c_str(),
+                           correctName.c_str());
+                }
+              }
+            }
+        }
+        map<string,string> uploadedPhotos;
+        for (const auto& photoFile : photosInFolder)
+          if (!titleExistingInSet(photosInSet, photoFile.first))
           {
+            flickcurl_upload_params params;
+            memset(&params, '\0', sizeof(flickcurl_upload_params));
+            params.safety_level = 1;
+            params.content_type = 1;
+            params.hidden = 1;
+            params.is_family = 1;
+            params.title = photoFile.first.c_str();
+            params.photo_file = photoFile.second.c_str();
+
             if (!dryRun)
             {
-              printf("Photo/video %s not existing in folder anymore - deleting\n", photo->second.title.c_str());
-              if (auto ret = flickcurl_photos_delete(fc, photo->first.c_str()))
-                printf("ERROR: Unable to delete photo/video %s (id=%s): %d\n", photo->second.title.c_str(),
-                       photo->first.c_str(), ret);
+              printf("Uploading photo/video %s ...", params.photo_file);
+              fflush(stdout);
+              if (auto status = flickcurl_photos_upload_params(fc, &params))
+              {
+                printf("Done (id=%s)\n", status->photoid);
+                uploadedPhotos[photoFile.first] = status->photoid;
+                if (addToSet(fc, status->photoid, setName, &setId))
+                  photosInSet[status->photoid] = { photoFile.first, "", "" };
+                flickcurl_free_upload_status(status);
+              }
+              else
+                printf("Failed!\n");
+            }
+            else
+            {
+              printf("Need to upload photo %s\n", params.photo_file);
+              uploadedPhotos[photoFile.first] = "-";
+            }
+          }
+          else
+            printf("Photo/video %s is already existing in set, skipping\n", photoFile.first.c_str());
+
+        int downloaded = 0;
+        int deleted = 0;
+        auto photo = photosInSet.begin();
+        while (photo != photosInSet.end())
+        {
+          if (photosInFolder.count(photo->second.title) == 0)
+          {
+            if (removeNonExisting)
+            {
+              if (!dryRun)
+              {
+                printf("Photo/video %s not existing in folder anymore - deleting\n", photo->second.title.c_str());
+                if (auto ret = flickcurl_photos_delete(fc, photo->first.c_str()))
+                  printf("ERROR: Unable to delete photo/video %s (id=%s): %d\n", photo->second.title.c_str(),
+                         photo->first.c_str(), ret);
+                else
+                {
+                  ++deleted;
+                  photo = photosInSet.erase(photo);
+                  continue;
+                }
+              }
               else
               {
+                printf("Photo/video %s not existing in folder anymore - need to delete it\n", photo->second.title.c_str());
                 ++deleted;
                 photo = photosInSet.erase(photo);
                 continue;
               }
             }
-            else
+            else if (downloadNonExisting)
             {
-              printf("Photo/video %s not existing in folder anymore - need to delete it\n", photo->second.title.c_str());
-              ++deleted;
-              photo = photosInSet.erase(photo);
-              continue;
+              if (downloadPhoto(photo->first, photo->second.title, folder))
+                ++downloaded;
             }
+            else
+              printf("WARNING: Photo/video %s not existing in folder anymore, specify -r to remove or -d to download these\n", photo->second.title.c_str());
           }
-          else if (downloadNonExisting)
+          auto photosInSetClone = photosInSet;
+          auto clonedPhoto = photosInSetClone.begin();
+          while (clonedPhoto != photosInSetClone.end())
           {
-            if (auto sizes = flickcurl_photos_getSizes(fc, photo->first.c_str()))
+            if (photo->first != clonedPhoto->first)
             {
-              string filePath;
-              string downloadUrl;
-              for (int i = 0; sizes[i]; ++i)
+              if (photo->second.title == clonedPhoto->second.title &&
+                  photo->second.dateTaken == clonedPhoto->second.dateTaken &&
+                  photo->second.description == clonedPhoto->second.description)
               {
-                if (strcmp(sizes[i]->media, "video") == 0 &&
-                    strcmp(sizes[i]->label, "Video Original") == 0)
+                if (removeDuplicates && dryRun)
                 {
-                  filePath = folder.filePath(QString(photo->second.title.c_str()) + ".mp4").toStdString();
-                  downloadUrl = sizes[i]->source;
-                  break;
-                }
-                else if (strcmp(sizes[i]->media, "photo") == 0 &&
-                         strcmp(sizes[i]->label, "Original") == 0)
-                {
-                  filePath = folder.filePath(QString(photo->second.title.c_str()) + ".jpg").toStdString();
-                  downloadUrl = sizes[i]->source;
-                }
-              }
-              if (!downloadUrl.empty())
-              {
-                if (!dryRun)
-                {
-                  printf("Starting to download photo/video file '%s' ...", filePath.c_str());
-                  fflush(stdout);
-                  if (downloadFile(downloadUrl, filePath))
-                  {
-                    printf("Done\n");
-                    ++downloaded;
-                  }
+                  printf("Removing duplicate of photo/video file '%s' (id=%s)!\n", clonedPhoto->second.title.c_str(), clonedPhoto->first.c_str());
+                  if (auto ret = flickcurl_photos_delete(fc, clonedPhoto->first.c_str()))
+                    printf("ERROR: Unable to delete photo/video %s (id=%s): %d\n", clonedPhoto->second.title.c_str(),
+                           clonedPhoto->first.c_str(), ret);
                   else
-                    printf("Failed!\n");
+                  {
+                    ++deleted;
+                    clonedPhoto = photosInSetClone.erase(clonedPhoto);
+                    continue;
+                  }
                 }
                 else
-                {
-                  printf("Need to download photo/video file '%s'\n", filePath.c_str());
-                  ++downloaded;
-                }
+                  printf("WARNING: duplicates of photo/video file title '%s' found (id=%s && id=%s)!\n", clonedPhoto->second.title.c_str(), photo->first.c_str(), clonedPhoto->first.c_str());
               }
             }
+            ++clonedPhoto;
+          }
+          ++photo;
+        }
+
+        if (sortByTitle && !photosInSet.empty())
+        {
+          map<string,string> reorderedIds;
+          for (const auto& photo : photosInSet)
+            reorderedIds[photo.second.title] = photo.first;
+
+          vector<const char*> reorderedIdsVector;
+          for (const auto& id : reorderedIds)
+            reorderedIdsVector.emplace_back(id.second.c_str());
+          reorderedIdsVector.emplace_back(nullptr);
+
+          if (!dryRun)
+          {
+            if (auto ret = flickcurl_photosets_reorderPhotos(fc, setId.c_str(), reorderedIdsVector.data()))
+              printf("ERROR: Unable to reorder photoset '%s' by photo/video titles: %d\n", setId.c_str(), ret);
+            else
+              printf("Photoset reordered '%s' by photo/video titles\n", setId.c_str());
           }
           else
-            printf("WARNING: Photo/video %s not existing in folder anymore, specify -r to remove or -d to download these\n", photo->second.title.c_str());
+            printf("Will reorder photoset '%s' by photo/video titles\n", setId.c_str());
         }
-        ++photo;
-      }
 
-      if (sortByTitle && photosInSet.size())
+        printf("FlickrSync finished: Photos/videos in folder=%ld, Uploaded=%ld, Deleted=%d, Downloaded=%d, Photos/videos in Flickr set=%ld\n",
+               photosInFolder.size(),
+               uploadedPhotos.size(),
+               deleted,
+               downloaded,
+               photosInSet.size());
+      }
+    }
+    if (getRandomPhoto)
+    {
+      string setName;
+      if (argc)
+        setName = argv[0];
+
+      random_device r;
+      default_random_engine re{r()};
+
+      map<string,string> setIds;
+      if (auto photoset_list = flickcurl_photosets_getList(fc, nullptr))
       {
-        map<string,string> reorderedIds;
-        for (const auto& photo : photosInSet)
-          reorderedIds[photo.second.title] = photo.first;
-
-        vector<const char*> reorderedIdsVector;
-        for (const auto& id : reorderedIds)
-          reorderedIdsVector.emplace_back(id.second.c_str());
-        reorderedIdsVector.emplace_back(nullptr);
-
-        if (!dryRun)
-        {
-          if (auto ret = flickcurl_photosets_reorderPhotos(fc, setId.c_str(), reorderedIdsVector.data()))
-            printf("ERROR: Unable to reorder photoset '%s' by photo/video titles: %d\n", setId.c_str(), ret);
-          else
-            printf("Photoset reordered '%s' by photo/video titles\n", setId.c_str());
-        }
-        else
-          printf("Will reorder photoset '%s' by photo/video titles\n", setId.c_str());
+        for(int i = 0; photoset_list[i]; i++)
+          if (setName.empty() || string(photoset_list[i]->title) == setName)
+            setIds[photoset_list[i]->id] = photoset_list[i]->title;
+        flickcurl_free_photosets(photoset_list);
+      }
+      auto setIdsSize = setIds.size();
+      auto setIdIterator = setIds.begin();
+      if (setIds.size() > 1)
+      {
+        uniform_int_distribution<size_t> photoIdsRandom(0, setIdsSize-1);
+        auto randomPhotoIdsIndex = photoIdsRandom(re);
+        advance(setIdIterator, randomPhotoIdsIndex);
       }
 
-      printf("FlickrSync finished: Photos/videos in folder=%ld, Uploaded=%ld, Deleted=%d, Downloaded=%d, Photos/videos in Flickr set=%ld\n",
-             photosInFolder.size(),
-             uploadedPhotos.size(),
-             deleted,
-             downloaded,
-             photosInSet.size());
+      map<string,photoInfo> photosSet;
+      if (setIdIterator != setIds.end())
+      {
+        if (auto photos = flickcurl_photosets_getPhotos(fc, setIdIterator->first.c_str(), "date_upload,date_taken,description", -1, -1, -1))
+        {
+          for (int i = 0; photos[i]; i++)
+          {
+            auto description = photos[i]->fields[PHOTO_FIELD_description].string;
+            photosSet[photos[i]->id] = {photos[i]->fields[PHOTO_FIELD_title].string,
+                                        photos[i]->fields[PHOTO_FIELD_dates_taken].string,
+                                        description ? description : ""};
+          }
+          flickcurl_free_photos(photos);
+        }
+      }
+      QDir folder(".");
+      auto photoSetSize = photosSet.size();
+      auto photoIterator = photosSet.begin();
+      uniform_int_distribution<size_t> photosetRandom(0, photoSetSize-1);
+      auto randomPhotoIndex = photosetRandom(re);
+      advance(photoIterator, randomPhotoIndex);
+      printf("Downloading random photo/video file '%s/%s'\n", setIdIterator->second.c_str(), photoIterator->second.title.c_str());
+      downloadPhoto(photoIterator->first, randomPhotoFileName, folder);
     }
   }
 
