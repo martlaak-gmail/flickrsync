@@ -18,9 +18,13 @@ where OPTIONS are:
 
 -r, --remove -- Delete photos/videos missing in local folder from Flickr
 
+-f, --remove-duplicates -- Delete duplicate photos in the set
+
 -s, --sort-by-title  -- Sort photos/videos by title after syncing
 
 -o, --set-titles-by-date-taken -- Set photo titles by title daken (in form YYYYMMDD-HHMMSS)
+
+-g, --get-random-photo {file} -- Download random photo from album to {file} (if no folder is specified random album is chosen)
 
 -h, --help -- Print this help, then exit
 
